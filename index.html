@@ -75,6 +75,7 @@
         textarea#codeInput::selection { background: rgba(0, 123, 255, 0.2); color: transparent; }
         .prev-line { position: absolute; left: 0; right: 0; height: 24px; background: rgba(35, 134, 54, 0.1); border-left: 3px solid #238636; pointer-events: none; display: none; z-index: 1; transition: top 0.1s ease; }
         .prev-line::before { content: ">"; color: #238636; position: absolute; left: 6px; top: 2px; font-size: 10px; font-weight: bold; }
+        
         .active-line { position: absolute; left: 0; right: 0; height: 24px; background: var(--hl-line-bg); border-left: 3px solid var(--hl-line-border); pointer-events: none; display: none; z-index: 1; transition: top 0.1s ease; }
         .active-line::before { content: "▶"; color: var(--hl-line-border); position: absolute; left: 6px; top: 2px; font-size: 10px; }
 
@@ -116,6 +117,20 @@
         .var-toggle-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f1f1f1; font-family: var(--font-code); font-size: 14px; }
         .var-toggle-item:last-child { border: none; }
         input[type="checkbox"] { accent-color: var(--text-accent); width: 16px; height: 16px; cursor: pointer; }
+
+        /* --- CSS CHO CÁC NÚT BẬT TẮT --- */
+        .hide-line { display: none !important; }
+        .btn-toggle-vis { background: #e0f7fa !important; color: #00838f !important; border-color: #b2ebf2 !important; }
+        .line-toggles { display: flex; flex-direction: column; gap: 4px; }
+        .btn-line { padding: 2px 8px !important; font-size: 10px !important; border-radius: 4px !important; height: 18px; line-height: 12px; }
+        .btn-line-red { background: rgba(217, 83, 79, 0.1) !important; color: #d9534f !important; border-color: #d9534f !important; }
+        .btn-line-green { background: rgba(35, 134, 54, 0.1) !important; color: #238636 !important; border-color: #238636 !important; }
+        .btn-line.disabled { opacity: 0.4; text-decoration: line-through; border-style: dashed !important;}
+
+        /* MA THUẬT: DI CHUYỂN I/O SANG PHẢI KHI TẮT VISUALIZER */
+        .workspace.hide-vis .pane-left { flex-direction: row; }
+        .workspace.hide-vis .editor-container { flex: 5; }
+        .workspace.hide-vis .io-wrapper { flex: 4; flex-direction: column; }
     </style>
 </head>
 <body>
@@ -135,6 +150,14 @@
         <div class="logo"><span>[ / ]</span> Unicorns Code Visualizer</div>
         <div class="controls">
             <span id="loader"><span class="spinning">⚙</span> Đang xử lý...</span>
+            
+            <div class="line-toggles">
+                <button id="btnToggleActive" class="btn-line btn-line-red" onclick="toggleActiveLine()" title="Bật/tắt line đỏ">🔴 Line</button>
+                <button id="btnTogglePrev" class="btn-line btn-line-green" onclick="togglePrevLine()" title="Bật/tắt line xanh">🟢 Line</button>
+            </div>
+
+            <button id="btnToggleVis" class="btn-toggle-vis" onclick="toggleVisualizer()" title="Bật/tắt bảng Visualizer">👁️ Ẩn Visualizer</button>
+
             <button onclick="toggleDebug()" title="Cài đặt biến">⚙</button>
             <select id="langSelect" onchange="changeLanguage()">
                 <option value="python">Python 3</option>
@@ -209,6 +232,51 @@ print(f"Tổng là: {tong}")</textarea>
         let currentStepIndex = 0;
         let isDebugOpen = false;
         let visibleVariables = new Set();
+
+        let isVisualizerVisible = true;
+        let isActiveLineVisible = true;
+        let isPrevLineVisible = true;
+
+        function toggleVisualizer() {
+            isVisualizerVisible = !isVisualizerVisible;
+            const paneRight = document.querySelector('.pane-right');
+            const workspace = document.querySelector('.workspace'); 
+            const btnToggleVis = document.getElementById('btnToggleVis');
+
+            if (isVisualizerVisible) {
+                paneRight.style.display = 'flex'; 
+                workspace.classList.remove('hide-vis'); 
+                btnToggleVis.innerHTML = '👁️ Ẩn Visualizer';
+            } else {
+                paneRight.style.display = 'none'; 
+                workspace.classList.add('hide-vis');
+                btnToggleVis.innerHTML = '👁️ Hiện Visualizer';
+            }
+        }
+
+        function toggleActiveLine() {
+            isActiveLineVisible = !isActiveLineVisible;
+            const btn = document.getElementById('btnToggleActive');
+            if (isActiveLineVisible) {
+                activeLine.classList.remove('hide-line');
+                btn.classList.remove('disabled');
+            } else {
+                activeLine.classList.add('hide-line');
+                btn.classList.add('disabled');
+            }
+        }
+
+        function togglePrevLine() {
+            isPrevLineVisible = !isPrevLineVisible;
+            const btn = document.getElementById('btnTogglePrev');
+            if (isPrevLineVisible) {
+                prevLine.classList.remove('hide-line');
+                btn.classList.remove('disabled');
+            } else {
+                prevLine.classList.add('hide-line');
+                btn.classList.add('disabled');
+            }
+        }
 
         codeInput.addEventListener('keydown', function(e) {
             if (e.key === 'Tab') {

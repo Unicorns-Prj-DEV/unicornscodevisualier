@@ -43,7 +43,7 @@ output_buffer = io.StringIO()
 error_msg = None
 
 def trace_calls(frame, event, arg):
-    if event == 'line' and frame.f_code.co_filename == 'main.py':
+    if event in ('line', 'return') and frame.f_code.co_filename == 'main.py':
         locals_copy = {}
         for k, v in frame.f_locals.items():
             if not k.startswith('__') and not isinstance(v, type) and not str(type(v)).startswith("<class 'function'>") and not str(type(v)).startswith("<class 'module'>"):

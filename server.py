@@ -3,11 +3,10 @@ import io
 import tempfile
 import os
 import subprocess
+import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from pygdbmi.gdbcontroller import GdbController
-import json
 
 # --- KHỞI TẠO FASTAPI ---
 app = FastAPI()
@@ -20,18 +19,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- MODEL DỮ LIỆU ---
+# --- MODEL DỮ LIỆU CẬP NHẬT ---
 class CodeRequest(BaseModel):
     language: str
     code: str
+    inputs: str = ""  # Thêm trường inputs (mặc định rỗng)
 
 # --- LOGIC XỬ LÝ PYTHON ---
-def trace_python(code: str):
-    if "input(" in code:
-        return {"trace": [], "output": "", "error": "Hệ thống chưa hỗ trợ lệnh nhập dữ liệu (input). Vui lòng gán giá trị cứng."}
-
+def trace_python(code: str, inputs: str):
     with tempfile.TemporaryDirectory() as temp_dir:
-
         user_code_path = os.path.join(temp_dir, "main.py")
         with open(user_code_path, "w", encoding="utf-8") as f:
             f.write(code)
@@ -47,11 +43,9 @@ output_buffer = io.StringIO()
 error_msg = None
 
 def trace_calls(frame, event, arg):
-    # Chỉ bắt biến trong file main.py (code của user)
     if event == 'line' and frame.f_code.co_filename == 'main.py':
         locals_copy = {}
         for k, v in frame.f_locals.items():
-            # Lọc bỏ rác hệ thống và hàm/module
             if not k.startswith('__') and not isinstance(v, type) and not str(type(v)).startswith("<class 'function'>") and not str(type(v)).startswith("<class 'module'>"):
                 if isinstance(v, (int, float, str, bool)):
                     locals_copy[k] = {"type": "prim", "val": repr(v)}
@@ -65,13 +59,18 @@ def trace_calls(frame, event, arg):
                 else:
                     locals_copy[k] = {"type": "prim", "val": repr(v)}
 
+        # Lấy tên hàm hiện tại
+        func_name = frame.f_code.co_name
+        if func_name == '<module>':
+            func_name = 'Global (Main)'
+
         trace_log.append({
             "line": frame.f_lineno,
+            "func_name": func_name,
             "vars": locals_copy
         })
     return trace_calls
 
-# Hướng toàn bộ lệnh print() vào bộ nhớ đệm
 old_stdout = sys.stdout
 sys.stdout = output_buffer
 
@@ -81,17 +80,17 @@ try:
     
     compiled_code = compile(user_code, 'main.py', 'exec')
     
-    # Bật máy dò
     sys.settrace(trace_calls)
     exec(compiled_code, {"__name__": "__main__", "__file__": "main.py"})
+except EOFError:
+    # Bắt lỗi khi code đòi input() nhưng user không truyền đủ dữ liệu
+    error_msg = "Lỗi: Chương trình yêu cầu nhập dữ liệu (input) nhưng bạn chưa cung cấp đủ đầu vào."
 except Exception as e:
-    # Bắt lỗi cú pháp hoặc lỗi runtime của Python
     error_msg = traceback.format_exc().splitlines()[-1]
 finally:
     sys.settrace(None)
     sys.stdout = old_stdout
 
-# Lưu kết quả ra file để Server chính đọc
 with open("trace.json", "w", encoding="utf-8") as f:
     json.dump(trace_log, f)
 
@@ -111,11 +110,12 @@ if error_msg:
             subprocess.run(
                 [python_exe, "tracer.py"],
                 cwd=temp_dir,
+                input=inputs, # TRUYỀN LUỒNG INPUT VÀO ĐÂY
                 timeout=3, 
                 capture_output=True, text=True
             )
         except subprocess.TimeoutExpired:
-            return {"trace": [], "output": "", "error": "Chương trình Python bị kẹt vòng lặp vô hạn hoặc chạy quá 3 giây."}
+            return {"trace": [], "output": "", "error": "Chương trình Python kẹt vòng lặp vô hạn hoặc chờ input quá lâu."}
 
         trace_result = []
         output_result = ""
@@ -144,20 +144,26 @@ if error_msg:
         }
 
 # --- LOGIC XỬ LÝ C++ ---
-def trace_cpp(code: str):
-    if "cin" in code or "scanf" in code:
-        return {"trace": [], "output": "", "error": "Hệ thống chưa hỗ trợ nhập dữ liệu (cin, scanf)."}
+def trace_cpp(code: str, inputs: str):
+    import tempfile
+    import os
+    import subprocess
+    import json
 
     with tempfile.TemporaryDirectory() as temp_dir:
-
         exe_name = "main.exe" if os.name == 'nt' else "main.out"
         cpp_name = "main.cpp"
         
         cpp_path = os.path.join(temp_dir, cpp_name)
-        
         with open(cpp_path, "w", encoding="utf-8") as f:
             f.write(code)
 
+        # LƯU CHUỖI INPUT VÀO FILE
+        input_path = os.path.join(temp_dir, "input.txt")
+        with open(input_path, "w", encoding="utf-8") as f:
+            f.write(inputs)
+
+        # Biên dịch C++
         compile_process = subprocess.run(
             ["g++", "-g", "-O0", cpp_name, "-o", exe_name],
             cwd=temp_dir,
@@ -167,18 +173,51 @@ def trace_cpp(code: str):
         if compile_process.returncode != 0:
             return {"trace": [], "output": "", "error": "Lỗi biên dịch:\n" + compile_process.stderr}
 
+        # KỊCH BẢN GDB PYTHON (TỐI ƯU HÓA TỐC ĐỘ VÀ BẮT GLOBAL VARS)
         gdb_script = """
 import gdb
 import json
+import re
 
 trace_log = []
+
+# HÀM PHỤ: Lấy danh sách tên các biến Global được khai báo trong main.cpp
+def get_user_global_vars():
+    globals_list = []
+    try:
+        out = gdb.execute("info variables", to_string=True)
+        lines = out.split("\\n")
+        
+        is_in_main = False
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+            
+            if line.startswith("File main.cpp:"):
+                is_in_main = True
+                continue
+            elif line.startswith("File "):
+                is_in_main = False
+                continue
+                
+            if is_in_main and line:
+                # Regex bắt cả biến thường và mảng (ví dụ: int arr[100];)
+                match = re.search(r'\\b([A-Za-z_][A-Za-z0-9_]*)(?:\\[.*?\\])?\\s*;', line)
+                if match:
+                    var_name = match.group(1)
+                    if not var_name.startswith("_") and "@" not in var_name:
+                        globals_list.append(var_name)
+    except Exception as e:
+        pass
+    return globals_list
 
 try:
     gdb.execute("set pagination off")
     gdb.execute("break main")
-    
-    # Chạy và đẩy output của C++ ra file riêng (né rác console của GDB)
-    gdb.execute("run > output.txt")
+    gdb.execute("run < input.txt > output.txt")
+
+    # Chỉ quét biến Global 1 lần đầu tiên cho nhẹ hệ thống
+    user_globals = get_user_global_vars()
 
     while True:
         frame = gdb.selected_frame()
@@ -189,7 +228,6 @@ try:
             
         filename = sal.symtab.filename
         
-        # Chỉ gom biến nếu đang ở trong main.cpp
         if "main.cpp" not in filename:
             try:
                 gdb.execute("finish")
@@ -200,7 +238,21 @@ try:
         line_no = sal.line
         locals_dict = {}
         
-        # Lấy biến cực kỳ an toàn qua API của GDB
+        # --- BƯỚC 1: ĐỌC BIẾN GLOBAL ---
+        for g_name in user_globals:
+            try:
+                val_str = str(gdb.parse_and_eval(g_name))
+                if "{" in val_str and "}" in val_str:
+                    fmt_val = val_str
+                else:
+                    fmt_val = val_str.split(" ")[0]
+                
+                # Thêm prefix [Global] để UI hiển thị khác biệt
+                locals_dict[f"[Global] {g_name}"] = {"type": "prim", "val": fmt_val}
+            except:
+                pass
+        
+        # --- BƯỚC 2: ĐỌC BIẾN CỤC BỘ ---
         try:
             block = frame.block()
             while block and not block.is_global and not block.is_static:
@@ -209,7 +261,6 @@ try:
                         if not symbol.name.startswith("_"):
                             try:
                                 val = str(frame.read_var(symbol))
-                                # Format nhẹ để Frontend dễ vẽ
                                 if "{" in val and "}" in val:
                                     fmt_val = val
                                 else:
@@ -221,17 +272,23 @@ try:
         except:
             pass
 
+        # Lấy tên hàm từ GDB frame
+        func_name = frame.name()
+        if not func_name: 
+            func_name = "main"
+
         trace_log.append({
             "line": line_no,
+            "func_name": func_name,
             "vars": locals_dict
         })
         
-        gdb.execute("next")
+        # Dùng step để cho phép chui vào các hàm con do người dùng định nghĩa
+        gdb.execute("step")
         
 except Exception as e:
-    pass # Kết thúc chương trình 
+    pass 
 
-# Lưu toàn bộ lịch sử thành file JSON
 with open("trace.json", "w") as f:
     json.dump(trace_log, f)
 """
@@ -239,6 +296,7 @@ with open("trace.json", "w") as f:
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(gdb_script)
 
+        # Chạy GDB ngầm với Timeout 5s
         try:
             gdb_process = subprocess.run(
                 ["gdb", "--batch", "-x", "gdb_script.py", exe_name],
@@ -247,27 +305,29 @@ with open("trace.json", "w") as f:
                 capture_output=True, text=True
             )
         except subprocess.TimeoutExpired:
-            return {"trace": [], "output": "", "error": "Chương trình C++ kẹt vòng lặp hoặc chạy quá lâu."}
+            return {"trace": [], "output": "", "error": "Chương trình C++ kẹt vòng lặp hoặc chờ nhập dữ liệu quá lâu."}
 
         if "Python scripting is not supported" in gdb_process.stderr:
-             return {"trace": [], "output": "", "error": "Bản MinGW/GDB hiện tại của bạn không hỗ trợ Python API. Vui lòng cập nhật MinGW-w64 bản mới nhất."}
+             return {"trace": [], "output": "", "error": "Bản MinGW/GDB hiện tại không hỗ trợ Python API."}
 
         trace_result = []
         output_result = ""
         
+        # Đọc lại Trace Log
         json_path = os.path.join(temp_dir, "trace.json")
         if os.path.exists(json_path):
             with open(json_path, "r", encoding="utf-8") as f:
                 try: trace_result = json.load(f)
                 except: pass
                 
+        # Đọc lại Standard Output
         output_txt_path = os.path.join(temp_dir, "output.txt")
         if os.path.exists(output_txt_path):
             with open(output_txt_path, "r", encoding="utf-8") as f:
                 output_result = f.read()
 
         if not trace_result:
-            error_msg = "Không thu thập được dữ liệu. Code có thể không chứa khai báo biến, hoặc GDB bị lỗi nội bộ.\n" + gdb_process.stderr
+            error_msg = "Không thu thập được dữ liệu. Code có thể lỗi hoặc chưa gán đủ input.\n" + gdb_process.stderr
         else:
             error_msg = None
 
@@ -280,9 +340,10 @@ with open("trace.json", "w") as f:
 # --- API ENDPOINT ---
 @app.post("/api/visualize")
 async def visualize_code(req: CodeRequest):
+    # Lấy cả code và inputs từ request
     if req.language == "python":
-        return trace_python(req.code)
+        return trace_python(req.code, req.inputs)
     elif req.language == "cpp":
-        return trace_cpp(req.code)
+        return trace_cpp(req.code, req.inputs)
     else:
         return {"error": "Ngôn ngữ không được hỗ trợ", "trace": [], "output": ""}

@@ -209,7 +209,7 @@
             <button id="prevBtn" onclick="prevStep()" disabled title="Lùi lại 1 bước (Ctrl + ←)">⏮</button>
             <button id="nextBtn" onclick="nextStep()" disabled title="Tiếp tục 1 bước (Ctrl + →)">⏭</button>
             
-            <button id="runBtn" class="btn-run" onclick="runCode()" title="Biên dịch và chạy mô phỏng">▶ Chạy Code</button>
+            <button id="runBtn" class="btn-run" onclick="runCode()" title="Biên dịch và chạy mô phỏng (Ctrl + Enter)">▶ Chạy Code</button>
         </div>
     </div>
 
@@ -1079,6 +1079,11 @@ print(f"Tổng là: {tong}")</textarea>
                     e.preventDefault();
                     if (!prevBtn.disabled) {
                         prevStep();
+                    }
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (!runBtn.disabled) {
+                        runCode();
                     }
                 }
             }

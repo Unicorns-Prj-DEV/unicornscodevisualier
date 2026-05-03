@@ -7,6 +7,33 @@ import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import re
+import resource 
+
+def is_safe_python_code(code: str) -> str:
+    """Kiểm tra mã nguồn Python có chứa các lệnh nguy hiểm không."""
+    forbidden_patterns = [
+        r"import\s+os", r"import\s+subprocess", r"import\s+sys", r"import\s+pty",
+        r"from\s+os", r"from\s+subprocess", r"from\s+sys",
+        r"__import__", r"eval\(", r"exec\(", r"open\("
+    ]
+    
+    for pattern in forbidden_patterns:
+        if re.search(pattern, code):
+            return f"Phát hiện mã khả nghi ({pattern.replace('.*', '')}). Lệnh này bị cấm vì lý do bảo mật."
+    return None
+
+def set_resource_limits():
+    """Hàm đặt giới hạn RAM, CPU và Tiến trình con cho subprocess."""
+    try:
+        megabyte = 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (256 * megabyte, 256 * megabyte))
+        
+        resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
+        
+        resource.setrlimit(resource.RLIMIT_NPROC, (50, 50))
+    except Exception:
+        pass
 
 # --- KHỞI TẠO FASTAPI ---
 app = FastAPI()
@@ -27,6 +54,10 @@ class CodeRequest(BaseModel):
 
 # --- LOGIC XỬ LÝ PYTHON ---
 def trace_python(code: str, inputs: str):
+    security_error = is_safe_python_code(code)
+    if security_error:
+        return {"trace": [], "output": "", "error": security_error}
+    
     with tempfile.TemporaryDirectory() as temp_dir:
         user_code_path = os.path.join(temp_dir, "main.py")
         with open(user_code_path, "w", encoding="utf-8") as f:
@@ -118,13 +149,14 @@ if error_msg:
             subprocess.run(
                 [python_exe, "tracer.py"],
                 cwd=temp_dir,
-                input=inputs, # TRUYỀN LUỒNG INPUT VÀO ĐÂY
-                timeout=3, 
-                capture_output=True, text=True
+                input=inputs,
+                timeout=3,
+                capture_output=True, text=True,
+                preexec_fn=set_resource_limits 
             )
         except subprocess.TimeoutExpired:
             return {"trace": [], "output": "", "error": "Chương trình Python kẹt vòng lặp vô hạn hoặc chờ input quá lâu."}
-
+        
         trace_result = []
         output_result = ""
         error_result = None
@@ -194,7 +226,6 @@ def trace_cpp(code: str, inputs: str):
                 err_line = int(match.group(1))
             return {"trace": [], "output": "", "error": "Lỗi biên dịch:\n" + compile_process.stderr, "error_line": err_line}
 
-        # KỊCH BẢN GDB PYTHON (TỐI ƯU HÓA TỐC ĐỘ VÀ BẮT GLOBAL VARS)
         gdb_script = """
 import gdb
 import json
@@ -323,7 +354,8 @@ with open("trace.json", "w") as f:
                 ["gdb", "--batch", "-x", "gdb_script.py", exe_name],
                 cwd=temp_dir,
                 timeout=5,  
-                capture_output=True, text=True
+                capture_output=True, text=True,
+                preexec_fn=set_resource_limits # THÊM DÒNG NÀY VÀO ĐÂY
             )
         except subprocess.TimeoutExpired:
             return {"trace": [], "output": "", "error": "Chương trình C++ kẹt vòng lặp hoặc chờ nhập dữ liệu quá lâu."}
@@ -362,7 +394,6 @@ with open("trace.json", "w") as f:
 # --- API ENDPOINT ---
 @app.post("/api/visualize")
 async def visualize_code(req: CodeRequest):
-    # Lấy cả code và inputs từ request
     if req.language == "python":
         return trace_python(req.code, req.inputs)
     elif req.language == "cpp":

@@ -272,7 +272,7 @@ def trace_cpp(code: str, inputs: str):
                 input=inputs,
                 timeout=2, 
                 capture_output=True, text=True,
-                preexec_fn=set_resource_limits if os.name != 'nt' else None 
+                # preexec_fn=set_resource_limits if os.name != 'nt' else None 
             )
             end_time = time.perf_counter()
             time_ms = round((end_time - start_time) * 1000, 2)

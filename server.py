@@ -230,9 +230,7 @@ def trace_cpp(code: str, inputs: str):
         memory_kb = 0.0 
         
         exe_path = os.path.join(temp_dir, exe_name)
-        if os.name != 'nt':
-            exe_path = "./" + exe_name
-            
+        
         start_time = time.perf_counter()
         try:
             if HAS_RESOURCE and os.name != 'nt':
@@ -258,6 +256,7 @@ def trace_cpp(code: str, inputs: str):
                         capture_output=True, text=True, preexec_fn=set_resource_limits
                     )
             else:
+                # Trên Windows (Localhost): Chạy bình thường
                 exec_process = subprocess.run(
                     [exe_path], cwd=temp_dir, input=inputs, timeout=2, 
                     capture_output=True, text=True
@@ -268,6 +267,7 @@ def trace_cpp(code: str, inputs: str):
             
         except subprocess.TimeoutExpired:
             return {"trace": [], "output": "", "error": "Lỗi: Chương trình C++ chạy quá 2 giây (Time Limit Exceeded).", "error_line": -1, "time_ms": 2000.0, "memory_kb": 0.0}
+        
         gdb_script = """
 import gdb
 import json

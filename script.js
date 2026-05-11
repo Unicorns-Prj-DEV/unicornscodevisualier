@@ -712,11 +712,7 @@ async function runCode() {
         };
 
         let response;
-        try {
-            response = await fetch('http://10.60.50.228:8000/api/visualize', fetchOptions);
-        } catch (localErr) {
-            response = await fetch('https://unicornscodevisualier-production.up.railway.app/api/visualize', fetchOptions);
-        }
+        response = await fetch('unicornscodevisualier-production.up.railway.app/api/visualize', fetchOptions);
 
         if (!response.ok) {
             throw new Error(`Server trả về lỗi: ${response.status}`);

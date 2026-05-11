@@ -712,7 +712,7 @@ async function runCode() {
         };
 
         let response;
-        response = await fetch('unicornscodevisualier-production.up.railway.app/api/visualize', fetchOptions);
+        response = await fetch('https://unicornscodevisualier-production.up.railway.app/api/visualize', fetchOptions);
 
         if (!response.ok) {
             throw new Error(`Server trả về lỗi: ${response.status}`);
